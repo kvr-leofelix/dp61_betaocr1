@@ -1,0 +1,5 @@
+transformers>=4.49.0
+accelerate
+autoawq
+qwen-vl-utils
+PyMuPDF

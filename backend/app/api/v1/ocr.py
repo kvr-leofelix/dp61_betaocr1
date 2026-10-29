@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from backend.app.api.dependencies import get_current_user, require_roles
+from backend.app.core.config import settings
 from backend.app.db.session import get_db
 from backend.app.models.entities import (
     Document,
@@ -25,6 +27,7 @@ from backend.app.models.entities import (
 )
 from backend.app.schemas.ocr import (
     OCRRunOut,
+    OCRPreviewOut,
     OCRAnswerRegion,
     HumanReviewRequest,
     HumanReviewOut,
@@ -32,7 +35,12 @@ from backend.app.schemas.ocr import (
     GradingBatchOut,
     BatchItemUpdateRequest,
 )
-from backend.app.services.ocr_service import get_ocr_provider
+from backend.app.services.ocr_service import (
+    QwenOCRInferenceError,
+    QwenOCRInputError,
+    QwenOCRUnavailableError,
+    get_ocr_provider,
+)
 from backend.app.services.storage_service import storage_service
 from backend.app.services.batch_grading_service import (
     match_student_from_filename_or_text,
@@ -49,6 +57,58 @@ router = APIRouter(prefix="/ocr", tags=["OCR & Human Review"])
 class ProcessOCRRequest(BaseModel):
     document_id: str
     provider: str = "simulated"
+
+
+@router.post("/extract-preview", response_model=OCRPreviewOut)
+async def extract_ocr_preview(
+    files: List[UploadFile] = File(...),
+    wait_before_each_image: bool = Form(False),
+    educator: User = Depends(require_roles("admin", "principal", "teacher")),
+):
+    if not files:
+        raise HTTPException(status_code=400, detail="Please select at least one image or PDF.")
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail="Maximum upload size is 50 files at a time.")
+
+    provider = get_ocr_provider("qwen")
+    results = []
+    for file in files:
+        detail = await storage_service.save_upload_detailed(file)
+        if not detail["valid"]:
+            raise HTTPException(status_code=400, detail=detail["error"])
+
+        try:
+            if detail["mime_type"] not in {"image/jpeg", "image/png", "application/pdf"}:
+                raise HTTPException(
+                    status_code=415,
+                    detail=f"Unsupported OCR file '{detail['file_name']}'. Upload JPG, PNG, or PDF.",
+                )
+
+            extraction = await provider.extract_document(
+                detail["storage_path"],
+                {"buffer_seconds": 5 if wait_before_each_image else 0},
+            )
+            results.append(
+                {
+                    "file_name": detail["file_name"],
+                    "extracted_text": extraction["extracted_text"],
+                    "pages_processed": extraction["pages_processed"],
+                }
+            )
+        except QwenOCRUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except QwenOCRInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except QwenOCRInferenceError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            Path(detail["storage_path"]).unlink(missing_ok=True)
+
+    return {
+        "provider": "qwen2.5-vl",
+        "model_version": settings.QWEN_VL_MODEL_ID,
+        "results": results,
+    }
 
 
 @router.post("/process", response_model=OCRRunOut)

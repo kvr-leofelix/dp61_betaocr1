@@ -55,6 +55,18 @@ class OCRRunOut(BaseSchema):
     created_at: Any
 
 
+class OCRPreviewItem(BaseModel):
+    file_name: str
+    extracted_text: str
+    pages_processed: int
+
+
+class OCRPreviewOut(BaseModel):
+    provider: str
+    model_version: str
+    results: List[OCRPreviewItem]
+
+
 class VerifiedItemRequest(BaseModel):
     item_index: int
     marks: int

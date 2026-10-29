@@ -379,6 +379,30 @@ export const apiClient = {
 
   // OCR, Optical Verification & Auto-Grade Batch Engine
   ocr: {
+    async extractPreview(files: File[], waitBeforeEachImage: boolean) {
+      const formData = new FormData();
+      formData.append('wait_before_each_image', String(waitBeforeEachImage));
+      files.forEach((file) => formData.append('files', file));
+
+      const response = await request<{
+        provider: string;
+        model_version: string;
+        results: { file_name: string; extracted_text: string; pages_processed: number }[];
+      }>('/ocr/extract-preview', {
+        method: 'POST',
+        body: formData,
+      });
+
+      return {
+        provider: response.provider,
+        modelVersion: response.model_version,
+        results: response.results.map((result) => ({
+          fileName: result.file_name,
+          extractedText: result.extracted_text,
+          pagesProcessed: result.pages_processed,
+        })),
+      };
+    },
     async processDocument(documentId: string, provider: string = 'simulated') {
       return request<any>('/ocr/process', {
         method: 'POST',
@@ -518,4 +542,3 @@ export const apiClient = {
     },
   },
 };
-

@@ -2,23 +2,25 @@
 
 ## 1. Overview & Non-Negotiable Invariants
 
-The LumenEIOS Optical Assessment Pipeline transcribes handwritten and printed student test sheets into structured digital evaluation records. It enables low-tech and hybrid schools to administer paper-based formative assessments while benefiting from competency analytics.
+The LumenEIOS Optical Assessment Pipeline transcribes handwritten and printed student test sheets. The Qwen preview workflow returns extracted text for inspection and does not grade or publish marks.
 
 ### Non-Negotiable Pedagogical Invariant
 > **Human-in-the-Loop Verification**: An AI or OCR model is NEVER permitted to independently publish marks, modify competency records, or alter student masteries. Every machine transcription produces a provisional preview that requires affirmative verification by an authorized educator.
 
 ```mermaid
 flowchart TD
-    Scan["Physical Student Answer Sheet"] --> Upload["Document Ingestion<br/>(MIME & Magic Bytes Validation)"]
-    Upload --> SecureStorage["Encrypted Local/S3 Storage"]
+    Scan["Physical Student Answer Sheet"] --> Upload["Document Ingestion<br/>(MIME checks & file decoding)"]
+    Upload --> SecureStorage["Validated temporary backend storage"]
     SecureStorage --> ProviderDispatcher{"Active OCR Provider"}
     ProviderDispatcher -->|Simulated| SimProvider["Simulated Deterministic Provider<br/>(BBox, Confidence & Suggestions)"]
     ProviderDispatcher -->|TrOCR| TrOCRProvider["HuggingFace Vision TrOCR<br/>(microsoft/trocr-base-handwritten)"]
     ProviderDispatcher -->|PaddleOCR| PaddleProvider["PaddleOCR Indic Engine<br/>(Devanagari & Multilingual)"]
+    ProviderDispatcher -->|Qwen2.5-VL| QwenProvider["Qwen2.5-VL-3B-Instruct-AWQ<br/>(backend CUDA GPU)"]
     
     SimProvider --> ProvisionalRun["Provisional OCR Run<br/>(ocr_runs table)"]
     TrOCRProvider --> ProvisionalRun
     PaddleProvider --> ProvisionalRun
+    QwenProvider --> Preview["OCR text preview<br/>(temporary upload removed after request)"]
     
     ProvisionalRun --> TeacherReview["Teacher Scan Review Interface<br/>(Side-by-Side Visual Verification)"]
     TeacherReview -->|Affirmative Teacher Sign-Off| GradeEntry["Official Assessment Submission &<br/>Competency Baseline Recalibration"]
@@ -29,10 +31,7 @@ flowchart TD
 
 ## 2. Ingestion & Security Validation
 
-Before any OCR model processes an incoming scan, the `StorageService` performs rigorous sanity checks:
-1. **Magic Bytes Validation**: Verifies initial binary signatures for JPEG (`FF D8 FF`), PNG (`89 50 4E 47`), and PDF (`25 50 44 46`).
-2. **File Size Limit**: Rejects files exceeding 25 MB.
-3. **Private File Path Generation**: Strips path traversal sequences (`../`, `..\\`) and assigns UUID-based namespaces within restricted storage volumes.
+The OCR preview accepts JPG, PNG, and PDF uploads and applies the existing 15 MB per-file limit. `StorageService` assigns UUID-based filenames under its configured backend storage directory. Image and PDF decoding validates that the content can be opened; temporary preview uploads are deleted after processing.
 
 ---
 
@@ -57,20 +56,17 @@ class BaseOCRProvider(abc.ABC):
    - Integrates Hugging Face's `microsoft/trocr-base-handwritten` for deep Transformer-based handwriting recognition.
 3. **`PaddleOCRProvider`**:
    - Optimized for lightweight on-premise execution with support for regional Indic scripts and mixed vernacular handwriting.
+4. **`QwenVisionOCRProvider`**:
+   - Uses `Qwen/Qwen2.5-VL-3B-Instruct-AWQ` by default, following the provided notebook's Transformers inference flow.
+   - Loads lazily in the FastAPI process and requires CUDA. Missing GPU/dependencies or inference errors are reported; it does not silently substitute simulated OCR.
+   - Converts PDF pages to images with PyMuPDF, up to 25 pages per PDF. The optional UI buffer waits five seconds before each image/page.
+
+### Qwen OCR developer preview
+
+Install a CUDA-enabled PyTorch build for the laptop, then install `backend/requirements-ocr.txt`. Run FastAPI on the laptop so inference uses its local GPU; production uses the same server-side provider on the backend host. The browser uploads files to `POST /api/v1/ocr/extract-preview`, and the backend returns each file's transcription to the **OCR Extraction Preview** panel. This endpoint is OCR-only: it does not persist grades, call the grading pipeline, or publish marks.
 
 ---
 
-## 4. Human-in-the-Loop Review Workflow
+## 4. OCR Preview and Existing Human Review
 
-1. The educator opens the **Scan Review** interface (`/teacher/scan-review`).
-2. The UI renders the optical scan image alongside machine-extracted bounding boxes and suggested item scores.
-3. The teacher reviews each answer line, verifies or edits marks, and optionally inputs qualitative feedback.
-4. Clicking **"Verify & Save Grades"** triggers `POST /api/v1/ocr/review/verify`.
-5. The backend transactionally:
-   - Records a `human_reviews` verification log.
-   - Updates `assessment_submissions` with the teacher's verified marks.
-   - Recalibrates the student's live competencies in `students`.
-   - Records an immutable snapshot in `student_competency_snapshots`.
-   - Adds the verified text snippet to `dataset_examples` for future model fine-tuning.
-   - Emits an `audit_events` trail.
-
+The current **Scan Review** screen (`/teacher/scan-review`) uploads files to `POST /api/v1/ocr/extract-preview` and displays each Qwen transcription in a separate preview panel. It does not award marks or publish results. The separate `POST /api/v1/ocr/review/verify` endpoint remains available for workflows that collect teacher-verified marks; the Qwen preview does not call it.

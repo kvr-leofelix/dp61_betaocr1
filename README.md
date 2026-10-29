@@ -139,9 +139,9 @@ The backend is implemented using **Python FastAPI** and **SQLAlchemy 2.x (Async)
 - **Validation**: Pydantic v2
 - **ORM & Database**: SQLAlchemy 2.x Async (`sqlite+aiosqlite` for zero-setup local runs; `postgresql+asyncpg` with pgvector for production)
 - **Security & RBAC**: JWT (HS256) + bcrypt password hashing + tenant isolation across 5 schools
-- **Testing**: Pytest + pytest-asyncio + HTTPX (26 automated test specs)
+- **Testing**: Pytest + pytest-asyncio + HTTPX
 - **Storage**: S3 / MinIO abstraction with local fallback
-- **OCR Engine**: Pluggable provider architecture (`SimulatedOCRProvider`, Hugging Face `TrOCR`, `PaddleOCR`) with mandatory Human-in-the-Loop teacher verification
+- **OCR Engine**: Qwen2.5-VL server-side extraction preview, simulated provider, and teacher verification workflows
 
 ---
 
@@ -163,6 +163,20 @@ python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 - Alternative ReDoc: **`http://localhost:8000/api/v1/redoc`**
 - System Health: **`http://localhost:8000/health`**
 
+#### Optional: Qwen OCR developer mode (CUDA)
+
+The OCR preview runs in the FastAPI backend, not in the browser. During development, run the backend on the laptop with its CUDA-capable GPU; production runs the same model in the backend server process.
+
+1. Install a CUDA-enabled PyTorch build compatible with the laptop's GPU and driver using the [PyTorch install selector](https://pytorch.org/get-started/locally/).
+2. Install the optional OCR packages:
+   ```bash
+   python -m pip install -r backend/requirements-ocr.txt
+   ```
+3. Start the backend as above. The default model is `Qwen/Qwen2.5-VL-3B-Instruct-AWQ`; override `QWEN_VL_MODEL_ID` in `.env` if needed.
+4. Open **Teacher → Scan Review**, upload one or more JPG, PNG, or PDF files, and click **Run OCR**. The optional checkbox waits five seconds before each image/page.
+
+The preview displays extracted text only; it does not grade or publish marks. OCR files are removed from temporary backend storage after each request. If CUDA or model dependencies are unavailable, the endpoint reports an error instead of returning simulated text.
+
 ### 8.2 Frontend Setup
 ```bash
 # 1. Install frontend dependencies
@@ -177,7 +191,7 @@ Open **`http://localhost:3000`** in your browser.
 ```bash
 python -m pytest backend/tests -v
 ```
-Executes all 26 unit and integration test specs covering permissions, pacing invariants, competency formulas, OCR evaluations, and API endpoints.
+Runs the backend unit and integration tests covering permissions, pacing invariants, OCR extraction, and API endpoints.
 
 ---
 
@@ -203,5 +217,3 @@ Detailed architectural documents are located in the [`docs/`](./docs) directory:
 - [Model Fine-Tuning & Evaluation Gates](./docs/model-training.md)
 - [Security, Permissions & Tenant Isolation](./docs/security.md)
 - [Deployment & Operational Guide](./docs/deployment.md)
-
-

@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     OCR_CONFIDENCE_THRESHOLD: float = 0.85
     HF_TOKEN: str = ""
     DEFAULT_VISION_MODEL: str = "microsoft/trocr-base-handwritten"
+    QWEN_VL_MODEL_ID: str = "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
 
     # LLM Provider
     LLM_PROVIDER: str = "deterministic"  # "deterministic", "huggingface", "hosted"

@@ -1,5 +1,7 @@
 import pytest
-from backend.app.services.ocr_service import SimulatedOCRProvider
+from PIL import Image
+import backend.app.services.ocr_service as ocr_service
+from backend.app.services.ocr_service import QwenVisionOCRProvider, SimulatedOCRProvider
 from backend.app.services.model_training_service import (
     calculate_cer_wer,
     partition_dataset_by_student,
@@ -21,6 +23,26 @@ async def test_simulated_ocr_extraction():
         assert len(region["bounding_box"]) == 4
         assert region["suggested_marks"] > 0
         assert region["target_competency"] in ["LU", "CU", "AU", "CT"]
+
+
+@pytest.mark.asyncio
+async def test_qwen_ocr_image_preview_and_optional_buffer(tmp_path, monkeypatch):
+    image_path = tmp_path / "answer.png"
+    Image.new("RGB", (4, 4), "white").save(image_path)
+
+    provider = QwenVisionOCRProvider()
+    waits = []
+    monkeypatch.setattr(provider, "_load_model", lambda: None)
+    monkeypatch.setattr(provider, "_infer_image", lambda _image: "उत्तर = 2")
+    monkeypatch.setattr(ocr_service.time, "sleep", waits.append)
+
+    result = await provider.extract_document(str(image_path), {"buffer_seconds": 5})
+    no_buffer_result = await provider.extract_document(str(image_path))
+
+    assert result["extracted_text"] == "उत्तर = 2"
+    assert result["pages_processed"] == 1
+    assert no_buffer_result["extracted_text"] == "उत्तर = 2"
+    assert waits == [5]
 
 
 def test_calculate_cer_wer_exact_match():
@@ -77,4 +99,3 @@ def test_check_model_promotion_criteria():
     passed_acc_fail, msg_acc = check_model_promotion_criteria(cer=0.03, wer=0.08, field_accuracy=0.85)
     assert passed_acc_fail is False
     assert "Field accuracy" in msg_acc
-

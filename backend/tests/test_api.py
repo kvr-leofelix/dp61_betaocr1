@@ -1,4 +1,7 @@
 import pytest
+from pathlib import Path
+import backend.app.api.v1.ocr as ocr_api
+from backend.app.services.ocr_service import QwenOCRUnavailableError
 
 
 @pytest.mark.asyncio
@@ -162,6 +165,61 @@ async def test_simulated_ocr_and_human_review(client, teacher_token):
 
 
 @pytest.mark.asyncio
+async def test_qwen_ocr_preview_accepts_multiple_files_and_passes_buffer(client, teacher_token, monkeypatch):
+    paths = []
+    options_seen = []
+
+    class PreviewProvider:
+        async def extract_document(self, document_path, options=None):
+            paths.append(Path(document_path))
+            options_seen.append(options)
+            assert Path(document_path).exists()
+            return {"extracted_text": "Recognized answer", "pages_processed": 1}
+
+    monkeypatch.setattr(ocr_api, "get_ocr_provider", lambda _name: PreviewProvider())
+    response = await client.post(
+        "/api/v1/ocr/extract-preview",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+        data={"wait_before_each_image": "true"},
+        files=[
+            ("files", ("first.png", b"first image", "image/png")),
+            ("files", ("second.jpg", b"second image", "image/jpeg")),
+        ],
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert [item["file_name"] for item in result["results"]] == ["first.png", "second.jpg"]
+    assert all(item["extracted_text"] == "Recognized answer" for item in result["results"])
+    assert options_seen == [{"buffer_seconds": 5}, {"buffer_seconds": 5}]
+    assert all(not path.exists() for path in paths)
+
+
+@pytest.mark.asyncio
+async def test_qwen_ocr_preview_reports_unavailable_gpu_and_cleans_upload(
+    client, teacher_token, monkeypatch
+):
+    paths = []
+
+    class UnavailableProvider:
+        async def extract_document(self, document_path, _options=None):
+            paths.append(Path(document_path))
+            raise QwenOCRUnavailableError("CUDA GPU is unavailable.")
+
+    monkeypatch.setattr(ocr_api, "get_ocr_provider", lambda _name: UnavailableProvider())
+    response = await client.post(
+        "/api/v1/ocr/extract-preview",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+        files=[("files", ("answer.png", b"image bytes", "image/png"))],
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "CUDA GPU is unavailable."
+    assert len(paths) == 1
+    assert not paths[0].exists()
+
+
+@pytest.mark.asyncio
 async def test_notifications_and_audit(client, admin_token, teacher_token):
     headers = {"Authorization": f"Bearer {teacher_token}"}
     res_notif = await client.get("/api/v1/notifications", headers=headers)
@@ -174,4 +232,3 @@ async def test_notifications_and_audit(client, admin_token, teacher_token):
     assert res_audit.status_code == 200
     logs = res_audit.json()
     assert len(logs) >= 1
-
